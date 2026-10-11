@@ -1,0 +1,141 @@
+import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+};
+
+interface GeminiResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+      }>;
+    };
+  }>;
+  error?: {
+    message?: string;
+  };
+}
+
+interface WasteAnalysis {
+  item_name: string;
+  material: string;
+  action: "recycle" | "donate" | "trash" | "hazardous";
+  condition_assessment: string;
+}
+
+const SYSTEM_PROMPT = `You are a waste-sorting expert assistant. Analyze the provided image of a waste item and return ONLY a strict JSON object with exactly these fields:
+{
+  "item_name": "string - the name of the item shown in the image",
+  "material": "string - the primary material(s) the item is made of (e.g. plastic, paper, glass, metal, organic, electronic, textile)",
+  "action": "recycle" | "donate" | "trash" | "hazardous",
+  "condition_assessment": "string - brief assessment of the item's condition and why the action was chosen"
+}
+
+Rules:
+- "action" must be exactly one of: "recycle", "donate", "trash", "hazardous"
+- Use "recycle" for items that can be processed and reused (clean plastics, paper, glass, metal)
+- Use "donate" for items in good condition that could be reused by others (clothing, working electronics, books, furniture)
+- Use "trash" for items that cannot be recycled or donated and belong in general waste
+- Use "hazardous" for items requiring special disposal (batteries, chemicals, paint, electronics with components, medical waste)
+- Return ONLY the JSON object, no markdown, no extra text, no code fences`;
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 200, headers: corsHeaders });
+  }
+
+  try {
+    const { image_base64, api_key, mime_type } = await req.json();
+
+    if (!image_base64 || !api_key) {
+      return new Response(
+        JSON.stringify({ error: "Missing image_base64 or api_key" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    const geminiUrl =
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${api_key}`;
+
+    const geminiBody = {
+      contents: [
+        {
+          parts: [
+            { text: SYSTEM_PROMPT },
+            {
+              inline_data: {
+                mime_type: mime_type || "image/jpeg",
+                data: image_base64,
+              },
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 512,
+        responseMimeType: "application/json",
+      },
+    };
+
+    const geminiResponse = await fetch(geminiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(geminiBody),
+    });
+
+    if (!geminiResponse.ok) {
+      const errorText = await geminiResponse.text();
+      let errorMessage = `Gemini API error (${geminiResponse.status})`;
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorMessage = errorJson.error?.message || errorMessage;
+      } catch {
+        // use default message
+      }
+      return new Response(
+        JSON.stringify({ error: errorMessage }),
+        { status: geminiResponse.status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    const geminiData: GeminiResponse = await geminiResponse.json();
+
+    const rawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) {
+      return new Response(
+        JSON.stringify({ error: "No response text from Gemini" }),
+        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    let analysis: WasteAnalysis;
+    try {
+      const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+      analysis = JSON.parse(cleaned);
+    } catch {
+      return new Response(
+        JSON.stringify({ error: "Failed to parse Gemini response as JSON", raw: rawText }),
+        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    const validActions = ["recycle", "donate", "trash", "hazardous"];
+    if (!validActions.includes(analysis.action)) {
+      analysis.action = "trash";
+    }
+
+    return new Response(
+      JSON.stringify({ analysis }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: err.message || "Internal server error" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+});
