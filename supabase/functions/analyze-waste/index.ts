@@ -1,5 +1,3 @@
-import { createClient } from "npm:@supabase/supabase-js@2.57.4";
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -58,7 +56,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const geminiUrl =
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${api_key}`;
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${api_key}`;
 
     const geminiBody = {
       contents: [
