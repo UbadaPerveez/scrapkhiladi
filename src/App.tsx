@@ -50,12 +50,23 @@ export default function App() {
   const processFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
-      const result = e.target?.result as string;
-      const base64 = result.split(",")[1];
-      setImageData(result);
-      setImageBase64(base64);
-      setMimeType(file.type || "image/jpeg");
-      runAnalysis(base64, file.type || "image/jpeg");
+      const source = e.target?.result as string;
+      const image = new Image();
+      image.onload = () => {
+        const maxSize = 1280;
+        const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(image.width * scale);
+        canvas.height = Math.round(image.height * scale);
+        canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const compressed = canvas.toDataURL("image/jpeg", 0.82);
+        const base64 = compressed.split(",")[1];
+        setImageData(compressed);
+        setImageBase64(base64);
+        setMimeType("image/jpeg");
+        runAnalysis(base64, "image/jpeg");
+      };
+      image.src = source;
     };
     reader.readAsDataURL(file);
   };

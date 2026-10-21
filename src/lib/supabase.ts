@@ -51,6 +51,12 @@ export async function analyzeImage(
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
+    if (response.status === 429 || response.status === 503) {
+      throw new Error("Gemini is temporarily busy. Please try again in a moment.");
+    }
+    if (response.status === 504) {
+      throw new Error("The scan took too long. Please try again with a clearer or smaller image.");
+    }
     throw new Error(errorData.error || `Request failed (${response.status})`);
   }
 

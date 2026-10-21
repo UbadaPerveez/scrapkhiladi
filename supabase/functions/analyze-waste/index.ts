@@ -79,15 +79,36 @@ Deno.serve(async (req: Request) => {
       },
     };
 
-    const geminiResponse = await fetch(geminiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(geminiBody),
-    });
+    let geminiResponse: Response | null = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        geminiResponse = await fetch(geminiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(geminiBody),
+          signal: AbortSignal.timeout(45000),
+        });
+      } catch (error) {
+        if (attempt === 1) {
+          return new Response(
+            JSON.stringify({ error: "Gemini is taking too long to respond. Please try scanning again." }),
+            { status: 504, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+        continue;
+      }
 
-    if (!geminiResponse.ok) {
-      const errorText = await geminiResponse.text();
-      let errorMessage = `Gemini API error (${geminiResponse.status})`;
+      if (geminiResponse.ok) break;
+      if (![429, 500, 502, 503, 504].includes(geminiResponse.status) || attempt === 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    if (!geminiResponse || !geminiResponse.ok) {
+      const status = geminiResponse?.status || 502;
+      const errorText = geminiResponse ? await geminiResponse.text() : "";
+      let errorMessage = status === 429 || status === 503
+        ? "Gemini is temporarily busy. Please try again in a moment."
+        : `Gemini API error (${status})`;
       try {
         const errorJson = JSON.parse(errorText);
         errorMessage = errorJson.error?.message || errorMessage;
@@ -96,7 +117,7 @@ Deno.serve(async (req: Request) => {
       }
       return new Response(
         JSON.stringify({ error: errorMessage }),
-        { status: geminiResponse.status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        { status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
