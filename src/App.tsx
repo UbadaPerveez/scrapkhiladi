@@ -1,28 +1,47 @@
 import { useState, useRef, useEffect } from "react";
 import {
-  analyzeImage,
+  analyzeImageStructured,
+  createAnalysisRecord,
+  updateAnalysisRecommendation,
+  addEvidence,
+  fetchEvidence,
   saveScanHistory,
   fetchScanHistory,
   deleteScanEntry,
   fetchStats,
-  WasteAnalysis,
-  ScanHistoryEntry,
+  type StructuredAnalysis,
+  type EvidenceItem,
+  type Recommendation,
+  type AnalysisRecord,
+  type ScanHistoryEntry,
 } from "@/lib/supabase";
 import { getApiKey, hasApiKey } from "@/lib/apiKey";
+import { generateRecommendation, mapActionForLegacyTable } from "@/lib/decisionEngine";
+import {
+  getInitialQuestion,
+  getNextQuestion,
+  type Question,
+} from "@/lib/questionTree";
+import type { FunctionalCondition, RecommendedAction } from "@/lib/analysisTypes";
 import ScanResult from "@/components/ScanResult";
+import RecommendationView from "@/components/RecommendationView";
+import InspectionFlow from "@/components/InspectionFlow";
 import SettingsModal from "@/components/SettingsModal";
 import HistoryView from "@/components/HistoryView";
 import MapOverlay from "@/components/MapOverlay";
 import { Settings, Camera, Image as ImageIcon, History, Leaf, Loader2, AlertCircle, ScanLine } from "lucide-react";
 
-type AppState = "idle" | "scanning" | "result" | "error";
+type AppState = "idle" | "scanning" | "result" | "inspection" | "recommendation" | "error";
 
 export default function App() {
   const [appState, setAppState] = useState<AppState>("idle");
   const [imageData, setImageData] = useState<string>("");
   const [imageBase64, setImageBase64] = useState<string>("");
   const [mimeType, setMimeType] = useState<string>("image/jpeg");
-  const [analysis, setAnalysis] = useState<WasteAnalysis | null>(null);
+  const [structuredAnalysis, setStructuredAnalysis] = useState<StructuredAnalysis | null>(null);
+  const [analysisRecord, setAnalysisRecord] = useState<AnalysisRecord | null>(null);
+  const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
+  const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -33,6 +52,7 @@ export default function App() {
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [mapQueryType, setMapQueryType] = useState<string>("recycle");
   const [needsKey, setNeedsKey] = useState(!hasApiKey());
+  const [pendingQuestions, setPendingQuestions] = useState<Question[]>([]);
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -64,7 +84,7 @@ export default function App() {
         setImageData(compressed);
         setImageBase64(base64);
         setMimeType("image/jpeg");
-        runAnalysis(base64, "image/jpeg");
+        runStructuredAnalysis(base64, "image/jpeg");
       };
       image.src = source;
     };
@@ -81,7 +101,7 @@ export default function App() {
     if (file) processFile(file);
   };
 
-  const runAnalysis = async (base64: string, type: string) => {
+  const runStructuredAnalysis = async (base64: string, type: string) => {
     const apiKey = getApiKey();
     if (!apiKey) {
       setNeedsKey(true);
@@ -94,27 +114,153 @@ export default function App() {
     setAppState("scanning");
 
     try {
-      const result = await analyzeImage(base64, apiKey, type);
-      setAnalysis(result);
+      const result = await analyzeImageStructured(base64, apiKey, type);
+      setStructuredAnalysis(result);
 
-      const savedFromLandfill = ["recycle", "donate", "hazardous"].includes(result.action);
+      const record = await createAnalysisRecord(
+        result,
+        imageData,
+        coords?.lat || null,
+        coords?.lng || null,
+      );
+      setAnalysisRecord(record);
 
-      await saveScanHistory({
-        item_name: result.item_name,
-        material: result.material,
-        action: result.action,
-        condition_assessment: result.condition_assessment,
-        image_data: imageData,
-        latitude: coords?.lat || null,
-        longitude: coords?.lng || null,
-        saved_from_landfill: savedFromLandfill,
-      });
+      if (result.needs_more_information && result.next_question) {
+        const analysisId = record?.id || "";
+        const answeredFields = new Set<string>();
+        const initialQuestion = getInitialQuestion(result, answeredFields);
+        if (initialQuestion) {
+          const questions: Question[] = [initialQuestion];
+          setPendingQuestions(questions);
 
-      await loadHistory();
-      setAppState("result");
+          // Generate initial recommendation based on image only
+          const initialRec = generateRecommendation(result, []);
+          setRecommendation(initialRec);
+
+          if (initialRec.recommended_action === "NEEDS_MORE_INFORMATION") {
+            setAppState("inspection");
+          } else {
+            // Even if recommendation exists, show inspection for better accuracy
+            setAppState("inspection");
+          }
+        } else {
+          const rec = generateRecommendation(result, []);
+          setRecommendation(rec);
+          if (record) {
+            await updateAnalysisRecommendation(record.id, rec, result.visible_condition);
+          }
+          await saveToLegacyHistory(result, rec);
+          setAppState("recommendation");
+        }
+      } else {
+        const rec = generateRecommendation(result, []);
+        setRecommendation(rec);
+        if (record) {
+          await updateAnalysisRecommendation(record.id, rec, result.visible_condition);
+        }
+        await saveToLegacyHistory(result, rec);
+        setAppState("recommendation");
+      }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Failed to analyze image");
       setAppState("error");
+    }
+  };
+
+  const saveToLegacyHistory = async (
+    analysis: StructuredAnalysis,
+    rec: Recommendation,
+  ) => {
+    const legacyAction = mapActionForLegacyTable(rec.recommended_action);
+    const savedFromLandfill = ["recycle", "donate", "hazardous"].includes(legacyAction);
+    await saveScanHistory({
+      item_name: analysis.item_type,
+      material: analysis.visible_materials.join(", ") || "unknown",
+      action: legacyAction,
+      condition_assessment: rec.reason,
+      image_data: imageData,
+      latitude: coords?.lat || null,
+      longitude: coords?.lng || null,
+      saved_from_landfill: savedFromLandfill,
+    });
+    await loadHistory();
+  };
+
+  const handleAnswerSubmit = async (
+    field: string,
+    value: string,
+    description: string,
+    additionalPhoto?: string,
+  ) => {
+    if (!analysisRecord) return;
+
+    const newEvidence = await addEvidence(
+      analysisRecord.id,
+      "user_answer",
+      "user_answer",
+      field,
+      value,
+      description,
+    );
+
+    if (newEvidence) {
+      const updatedEvidence = [...evidence, newEvidence];
+      setEvidence(updatedEvidence);
+
+      // If additional photo was provided, store it as image evidence
+      if (additionalPhoto) {
+        const photoEvidence = await addEvidence(
+          analysisRecord.id,
+          "image",
+          "user_upload",
+          field,
+          "additional_photo",
+          "Additional photo provided by user",
+        );
+        if (photoEvidence) {
+          setEvidence((prev) => [...prev, photoEvidence]);
+        }
+      }
+    }
+  };
+
+  const handleSkip = async (field: string) => {
+    if (!analysisRecord) return;
+    const newEvidence = await addEvidence(
+      analysisRecord.id,
+      "user_answer",
+      "user_answer",
+      field,
+      "skipped",
+      "User skipped this question",
+    );
+    if (newEvidence) {
+      setEvidence((prev) => [...prev, newEvidence]);
+    }
+  };
+
+  const handleInspectionComplete = async () => {
+    if (!structuredAnalysis || !analysisRecord) return;
+
+    const allEvidence = await fetchEvidence(analysisRecord.id);
+    setEvidence(allEvidence);
+
+    const rec = generateRecommendation(structuredAnalysis, allEvidence);
+    setRecommendation(rec);
+
+    await updateAnalysisRecommendation(analysisRecord.id, rec, structuredAnalysis.visible_condition);
+    await saveToLegacyHistory(structuredAnalysis, rec);
+
+    setAppState("recommendation");
+  };
+
+  const handleAnswerMore = () => {
+    if (!structuredAnalysis) return;
+    const answeredFields = new Set(evidence.map((e) => e.field));
+    const initialQuestion = getInitialQuestion(structuredAnalysis, answeredFields);
+    if (initialQuestion) {
+      setPendingQuestions([initialQuestion]);
+      setAppState("inspection");
     }
   };
 
@@ -127,24 +273,24 @@ export default function App() {
     }
 
     navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude } = position.coords;
-          setCoords({ lat: latitude, lng: longitude });
-          if (analysis) {
-            setMapQueryType(analysis.action);
-          }
-          setShowMap(true);
-          setLoadingMap(false);
-        },
-        (err) => {
-          setErrorMsg(
-            err.code === 1
-              ? "Location permission denied. Please enable location access to find nearby facilities."
-              : "Could not get your location. Please try again.",
-          );
-          setLoadingMap(false);
-        },
-        { enableHighAccuracy: true, timeout: 10000 },
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setCoords({ lat: latitude, lng: longitude });
+        if (recommendation) {
+          setMapQueryType(recommendation.recommended_action);
+        }
+        setShowMap(true);
+        setLoadingMap(false);
+      },
+      (err) => {
+        setErrorMsg(
+          err.code === 1
+            ? "Location permission denied. Please enable location access to find nearby facilities."
+            : "Could not get your location. Please try again.",
+        );
+        setLoadingMap(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
     );
   };
 
@@ -155,10 +301,14 @@ export default function App() {
 
   const resetScan = () => {
     setAppState("idle");
-    setAnalysis(null);
+    setStructuredAnalysis(null);
+    setAnalysisRecord(null);
+    setEvidence([]);
+    setRecommendation(null);
     setImageData("");
     setImageBase64("");
     setErrorMsg("");
+    setPendingQuestions([]);
     if (cameraInputRef.current) cameraInputRef.current.value = "";
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -279,12 +429,45 @@ export default function App() {
             </div>
           )}
 
-          {appState === "result" && analysis && (
-            <ScanResult
-              result={analysis}
+          {appState === "inspection" && structuredAnalysis && (
+            <InspectionFlow
+              questions={pendingQuestions}
+              existingEvidence={evidence}
+              onSubmitAnswer={handleAnswerSubmit}
+              onSkip={handleSkip}
+              onComplete={handleInspectionComplete}
+              onCancel={() => {
+                if (recommendation) {
+                  setAppState("recommendation");
+                } else {
+                  handleInspectionComplete();
+                }
+              }}
+            />
+          )}
+
+          {appState === "recommendation" && structuredAnalysis && recommendation && (
+            <RecommendationView
+              analysis={structuredAnalysis}
+              recommendation={recommendation}
+              evidence={evidence}
               imageData={imageData}
               onFindLocations={handleFindLocations}
               onScanAgain={resetScan}
+              onAnswerMore={handleAnswerMore}
+              loadingMap={loadingMap}
+            />
+          )}
+
+          {appState === "result" && structuredAnalysis && recommendation && (
+            <RecommendationView
+              analysis={structuredAnalysis}
+              recommendation={recommendation}
+              evidence={evidence}
+              imageData={imageData}
+              onFindLocations={handleFindLocations}
+              onScanAgain={resetScan}
+              onAnswerMore={handleAnswerMore}
               loadingMap={loadingMap}
             />
           )}
@@ -331,7 +514,7 @@ export default function App() {
           onSaved={() => {
             setNeedsKey(false);
             if (appState === "error" && imageBase64) {
-              runAnalysis(imageBase64, mimeType);
+              runStructuredAnalysis(imageBase64, mimeType);
             }
           }}
         />

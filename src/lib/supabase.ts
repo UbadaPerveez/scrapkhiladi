@@ -11,6 +11,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export const EDGE_FUNCTION_URL = `${supabaseUrl}/functions/v1/analyze-waste`;
 
+// Legacy types preserved for backward compatibility
 export interface ScanHistoryEntry {
   id: string;
   item_name: string;
@@ -31,6 +32,81 @@ export interface WasteAnalysis {
   condition_assessment: string;
 }
 
+// New structured analysis types
+export type FunctionalCondition =
+  | "working"
+  | "partially_working"
+  | "not_working"
+  | "intermittent"
+  | "unknown";
+
+export type RecommendedAction =
+  | "REPAIR"
+  | "REUSE"
+  | "DONATE"
+  | "RESELL"
+  | "RECYCLE"
+  | "REPLACE"
+  | "SPECIAL_DISPOSAL"
+  | "NEEDS_MORE_INFORMATION";
+
+export interface StructuredAnalysis {
+  item_type: string;
+  broad_category: string;
+  brand: string;
+  model: string;
+  visible_materials: string[];
+  visible_condition: string;
+  visible_damage: string[];
+  functional_condition: FunctionalCondition;
+  missing_information: string[];
+  needs_more_information: boolean;
+  next_question: string | null;
+}
+
+export interface EvidenceItem {
+  id: string;
+  analysis_id: string;
+  kind: string;
+  source: string;
+  field: string;
+  value: string;
+  description: string;
+  created_at: string;
+}
+
+export interface Recommendation {
+  recommended_action: RecommendedAction;
+  reason: string;
+  supporting_evidence: string[];
+  uncertainty: string[];
+  alternative_actions: Array<{
+    action: RecommendedAction;
+    reason: string;
+  }>;
+  missing_information: string[];
+  professional_inspection_recommended: boolean;
+}
+
+export interface AnalysisRecord {
+  id: string;
+  image_data: string | null;
+  analysis_json: StructuredAnalysis;
+  item_type: string;
+  broad_category: string;
+  functional_condition: FunctionalCondition;
+  visible_condition: string;
+  needs_more_information: boolean;
+  recommendation_json: Recommendation | null;
+  recommended_action: RecommendedAction | null;
+  condition_assessment: string;
+  latitude: number | null;
+  longitude: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Existing function preserved for backward compatibility
 export async function analyzeImage(
   imageBase64: string,
   apiKey: string,
@@ -64,9 +140,147 @@ export async function analyzeImage(
   if (!data.analysis) {
     throw new Error("Invalid response from analysis service");
   }
-  return data.analysis as WasteAnalysis;
+
+  const analysis = data.analysis as StructuredAnalysis;
+  return {
+    item_name: analysis.item_type,
+    material: analysis.visible_materials.join(", "),
+    action: "trash",
+    condition_assessment: analysis.visible_condition,
+  };
 }
 
+// New structured analysis function
+export async function analyzeImageStructured(
+  imageBase64: string,
+  apiKey: string,
+  mimeType: string,
+): Promise<StructuredAnalysis> {
+  const response = await fetch(EDGE_FUNCTION_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${supabaseAnonKey}`,
+    },
+    body: JSON.stringify({
+      image_base64: imageBase64,
+      api_key: apiKey,
+      mime_type: mimeType,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    if (response.status === 429 || response.status === 503) {
+      throw new Error("Gemini is temporarily busy. Please try again in a moment.");
+    }
+    if (response.status === 504) {
+      throw new Error("The scan took too long. Please try again with a clearer or smaller image.");
+    }
+    throw new Error(errorData.error || `Request failed (${response.status})`);
+  }
+
+  const data = await response.json();
+  if (!data.analysis) {
+    throw new Error("Invalid response from analysis service");
+  }
+  return data.analysis as StructuredAnalysis;
+}
+
+export async function createAnalysisRecord(
+  analysis: StructuredAnalysis,
+  imageData: string | null,
+  latitude: number | null,
+  longitude: number | null,
+): Promise<AnalysisRecord | null> {
+  const { data, error } = await supabase
+    .from("item_analyses")
+    .insert({
+      image_data: imageData,
+      analysis_json: analysis,
+      item_type: analysis.item_type,
+      broad_category: analysis.broad_category,
+      functional_condition: analysis.functional_condition,
+      visible_condition: analysis.visible_condition,
+      needs_more_information: analysis.needs_more_information,
+      latitude,
+      longitude,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Failed to create analysis record:", error);
+    return null;
+  }
+  return data as AnalysisRecord;
+}
+
+export async function updateAnalysisRecommendation(
+  analysisId: string,
+  recommendation: Recommendation,
+  conditionAssessment: string,
+): Promise<boolean> {
+  const { error } = await supabase
+    .from("item_analyses")
+    .update({
+      recommendation_json: recommendation,
+      recommended_action: recommendation.recommended_action,
+      condition_assessment: conditionAssessment,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", analysisId);
+
+  if (error) {
+    console.error("Failed to update analysis recommendation:", error);
+    return false;
+  }
+  return true;
+}
+
+export async function addEvidence(
+  analysisId: string,
+  kind: string,
+  source: string,
+  field: string,
+  value: string,
+  description: string,
+): Promise<EvidenceItem | null> {
+  const { data, error } = await supabase
+    .from("analysis_evidence")
+    .insert({
+      analysis_id: analysisId,
+      kind,
+      source,
+      field,
+      value,
+      description,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Failed to add evidence:", error);
+    return null;
+  }
+  return data as EvidenceItem;
+}
+
+export async function fetchEvidence(analysisId: string): Promise<EvidenceItem[]> {
+  const { data, error } = await supabase
+    .from("analysis_evidence")
+    .select("*")
+    .eq("analysis_id", analysisId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("Failed to fetch evidence:", error);
+    return [];
+  }
+  return (data || []) as EvidenceItem[];
+}
+
+// Existing history functions preserved
 export async function saveScanHistory(
   entry: Omit<ScanHistoryEntry, "id" | "created_at">,
 ): Promise<ScanHistoryEntry | null> {
