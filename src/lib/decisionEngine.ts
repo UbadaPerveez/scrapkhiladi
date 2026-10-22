@@ -7,7 +7,6 @@ import type {
 import { getSafetyConcerns } from "./questionTree";
 
 const HAZARDOUS_CATEGORIES = new Set(["hazardous", "chemical", "battery", "medical"]);
-const HAZARDOUS_MATERIALS = new Set(["battery", "chemical", "paint", "mercury", "asbestos", "lead"]);
 
 const GOOD_VISIBLE_CONDITIONS = new Set(["like_new", "good"]);
 const FAIR_VISIBLE_CONDITIONS = new Set(["fair"]);

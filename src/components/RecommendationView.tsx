@@ -1,9 +1,7 @@
 import type { Recommendation, StructuredAnalysis, EvidenceItem } from "@/lib/analysisTypes";
-import { ACTION_CONFIG } from "@/lib/constants";
 import {
   Recycle,
   Heart,
-  Trash2,
   AlertTriangle,
   MapPin,
   Loader2,

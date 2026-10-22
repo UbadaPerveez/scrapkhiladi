@@ -17,13 +17,8 @@ import {
 } from "@/lib/supabase";
 import { getApiKey, hasApiKey } from "@/lib/apiKey";
 import { generateRecommendation, mapActionForLegacyTable } from "@/lib/decisionEngine";
-import {
-  getInitialQuestion,
-  getNextQuestion,
-  type Question,
-} from "@/lib/questionTree";
-import type { FunctionalCondition, RecommendedAction } from "@/lib/analysisTypes";
-import ScanResult from "@/components/ScanResult";
+import { getInitialQuestion } from "@/lib/questionTree";
+import type { Question } from "@/lib/analysisTypes";
 import RecommendationView from "@/components/RecommendationView";
 import InspectionFlow from "@/components/InspectionFlow";
 import SettingsModal from "@/components/SettingsModal";
@@ -126,7 +121,6 @@ export default function App() {
       setAnalysisRecord(record);
 
       if (result.needs_more_information && result.next_question) {
-        const analysisId = record?.id || "";
         const answeredFields = new Set<string>();
         const initialQuestion = getInitialQuestion(result, answeredFields);
         if (initialQuestion) {

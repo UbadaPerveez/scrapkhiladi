@@ -1,4 +1,19 @@
 import { createClient } from "@supabase/supabase-js";
+import type {
+  StructuredAnalysis,
+  EvidenceItem,
+  Recommendation,
+  RecommendedAction,
+  FunctionalCondition,
+} from "./analysisTypes";
+
+export type {
+  StructuredAnalysis,
+  EvidenceItem,
+  Recommendation,
+  RecommendedAction,
+  FunctionalCondition,
+};
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -30,62 +45,6 @@ export interface WasteAnalysis {
   material: string;
   action: "recycle" | "donate" | "trash" | "hazardous";
   condition_assessment: string;
-}
-
-// New structured analysis types
-export type FunctionalCondition =
-  | "working"
-  | "partially_working"
-  | "not_working"
-  | "intermittent"
-  | "unknown";
-
-export type RecommendedAction =
-  | "REPAIR"
-  | "REUSE"
-  | "DONATE"
-  | "RESELL"
-  | "RECYCLE"
-  | "REPLACE"
-  | "SPECIAL_DISPOSAL"
-  | "NEEDS_MORE_INFORMATION";
-
-export interface StructuredAnalysis {
-  item_type: string;
-  broad_category: string;
-  brand: string;
-  model: string;
-  visible_materials: string[];
-  visible_condition: string;
-  visible_damage: string[];
-  functional_condition: FunctionalCondition;
-  missing_information: string[];
-  needs_more_information: boolean;
-  next_question: string | null;
-}
-
-export interface EvidenceItem {
-  id: string;
-  analysis_id: string;
-  kind: string;
-  source: string;
-  field: string;
-  value: string;
-  description: string;
-  created_at: string;
-}
-
-export interface Recommendation {
-  recommended_action: RecommendedAction;
-  reason: string;
-  supporting_evidence: string[];
-  uncertainty: string[];
-  alternative_actions: Array<{
-    action: RecommendedAction;
-    reason: string;
-  }>;
-  missing_information: string[];
-  professional_inspection_recommended: boolean;
 }
 
 export interface AnalysisRecord {
@@ -240,8 +199,8 @@ export async function updateAnalysisRecommendation(
 
 export async function addEvidence(
   analysisId: string,
-  kind: string,
-  source: string,
+  kind: EvidenceItem["kind"],
+  source: EvidenceItem["source"],
   field: string,
   value: string,
   description: string,
