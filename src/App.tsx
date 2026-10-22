@@ -13,7 +13,7 @@ import ScanResult from "@/components/ScanResult";
 import SettingsModal from "@/components/SettingsModal";
 import HistoryView from "@/components/HistoryView";
 import MapOverlay from "@/components/MapOverlay";
-import { Settings, Camera, Image as ImageIcon, History, Leaf, Loader2, AlertCircle, ScanLine, X } from "lucide-react";
+import { Settings, Camera, Image as ImageIcon, History, Leaf, Loader2, AlertCircle, ScanLine } from "lucide-react";
 
 type AppState = "idle" | "scanning" | "result" | "error";
 

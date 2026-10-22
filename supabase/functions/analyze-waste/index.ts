@@ -88,7 +88,7 @@ Deno.serve(async (req: Request) => {
           body: JSON.stringify(geminiBody),
           signal: AbortSignal.timeout(45000),
         });
-      } catch (error) {
+      } catch {
         if (attempt === 1) {
           return new Response(
             JSON.stringify({ error: "Gemini is taking too long to respond. Please try scanning again." }),

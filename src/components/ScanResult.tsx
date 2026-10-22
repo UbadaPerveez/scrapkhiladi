@@ -1,7 +1,6 @@
-import { useState } from "react";
 import { WasteAnalysis } from "@/lib/supabase";
 import { ACTION_CONFIG } from "@/lib/constants";
-import { Recycle, Heart, Trash2, AlertTriangle, MapPin, X, Check, Loader2 } from "lucide-react";
+import { Recycle, Heart, Trash2, AlertTriangle, MapPin, Loader2 } from "lucide-react";
 
 interface ScanResultProps {
   result: WasteAnalysis;

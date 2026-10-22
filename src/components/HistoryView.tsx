@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { ScanHistoryEntry } from "@/lib/supabase";
 import { ACTION_CONFIG } from "@/lib/constants";
 import { Trash2, X, Clock, Recycle, Heart, AlertTriangle, Leaf } from "lucide-react";
